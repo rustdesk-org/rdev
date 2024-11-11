@@ -59,7 +59,7 @@ where
             return Err(ListenError::LoopSourceError);
         }
 
-        let current_loop = CFRunLoopGetMain();
+        let current_loop = CFRunLoopGetCurrent();
         CFRunLoopAddSource(current_loop, _loop, kCFRunLoopCommonModes);
 
         CGEventTapEnable(tap, true);
