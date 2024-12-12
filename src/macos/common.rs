@@ -168,6 +168,20 @@ pub unsafe fn convert(
         CGEventType::LeftMouseUp => Some(EventType::ButtonRelease(Button::Left)),
         CGEventType::RightMouseDown => Some(EventType::ButtonPress(Button::Right)),
         CGEventType::RightMouseUp => Some(EventType::ButtonRelease(Button::Right)),
+        CGEventType::LeftMouseDragged => {
+            let point = cg_event.location();
+            Some(EventType::MouseMove {
+                x: point.x,
+                y: point.y,
+            })
+        }
+        CGEventType::RightMouseDragged => {
+            let point = cg_event.location();
+            Some(EventType::MouseMove {
+                x: point.x,
+                y: point.y,
+            })
+        }
         CGEventType::MouseMoved => {
             let point = cg_event.location();
             Some(EventType::MouseMove {
