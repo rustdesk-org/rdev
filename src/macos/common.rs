@@ -64,6 +64,8 @@ pub const kCGEventMaskForAllEvents: u64 = (1 << CGEventType::LeftMouseDown as u6
     + (1 << CGEventType::LeftMouseUp as u64)
     + (1 << CGEventType::RightMouseDown as u64)
     + (1 << CGEventType::RightMouseUp as u64)
+    + (1 << CGEventType::OtherMouseDown as u64)
+    + (1 << CGEventType::OtherMouseUp as u64)
     + (1 << CGEventType::MouseMoved as u64)
     + (1 << CGEventType::LeftMouseDragged as u64)
     + (1 << CGEventType::RightMouseDragged as u64)
@@ -168,6 +170,18 @@ pub unsafe fn convert(
         CGEventType::LeftMouseUp => Some(EventType::ButtonRelease(Button::Left)),
         CGEventType::RightMouseDown => Some(EventType::ButtonPress(Button::Right)),
         CGEventType::RightMouseUp => Some(EventType::ButtonRelease(Button::Right)),
+        CGEventType::OtherMouseDown => {
+            match cg_event.get_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER) {
+                2 => Some(EventType::ButtonPress(Button::Middle)),
+                event => Some(EventType::ButtonPress(Button::Unknown(event as u8))),
+            }
+        }
+        CGEventType::OtherMouseUp => {
+            match cg_event.get_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER) {
+                2 => Some(EventType::ButtonRelease(Button::Middle)),
+                event => Some(EventType::ButtonRelease(Button::Unknown(event as u8))),
+            }
+        }
         CGEventType::MouseMoved => {
             let point = cg_event.location();
             Some(EventType::MouseMove {
