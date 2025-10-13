@@ -30,6 +30,8 @@ unsafe extern "C" fn raw_callback(
     cg_event
 }
 
+static mut CUR_LOOP: CFRunLoopSourceRef = std::ptr::null_mut();
+
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
     T: FnMut(Event) + 'static,
@@ -59,11 +61,21 @@ where
             return Err(ListenError::LoopSourceError);
         }
 
-        let current_loop = CFRunLoopGetMain();
-        CFRunLoopAddSource(current_loop, _loop, kCFRunLoopCommonModes);
+        CUR_LOOP = CFRunLoopGetCurrent() as _;
+        CFRunLoopAddSource(CUR_LOOP, _loop, kCFRunLoopCommonModes);
 
         CGEventTapEnable(tap, true);
         CFRunLoopRun();
+    }
+    Ok(())
+}
+
+pub fn exit_listen() -> Result<(), ListenError> {
+    unsafe {
+        if !CUR_LOOP.is_null() {
+            CFRunLoopStop(CUR_LOOP);
+            CUR_LOOP = std::ptr::null_mut();
+        }
     }
     Ok(())
 }
