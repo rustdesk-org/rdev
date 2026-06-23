@@ -288,7 +288,7 @@ impl Default for RawKey {
 /// Standard mouse buttons
 /// Some mice have more than 3 buttons. These are not defined, and different
 /// OSs will give different `Button::Unknown` values.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, EnumIter)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub enum Button {
     Left,
@@ -328,6 +328,7 @@ pub enum EventType {
 
 /// The Unicode information of input.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct UnicodeInfo {
     pub name: Option<String>,
     pub unicode: Vec<u16>,
