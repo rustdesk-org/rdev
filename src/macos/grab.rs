@@ -81,6 +81,7 @@ pub fn exit_grab() -> Result<(), GrabError> {
             CFRunLoopStop(CUR_LOOP);
             CUR_LOOP = std::ptr::null_mut();
         }
+        GLOBAL_CALLBACK = None;
     }
     Ok(())
 }
