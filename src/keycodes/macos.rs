@@ -130,9 +130,17 @@ decl_keycodes!(
     F3, kVK_F3,
     F8, kVK_F8,
     F9, kVK_F9,
-    Lang2, kVK_JIS_Eisu,
+    // NOTE: In this crate `Key::Lang1`/`Key::Lang2` are NOT the standard HID
+    // LANG1/LANG2 (0x90/0x91, i.e. Windows ImeOn/ImeOff). The source tables
+    // (windows/linux/usb_hid) bind them to the JIS Muhenkan/Henkan keys:
+    //   Key::Lang1 = 無変換 (Muhenkan / VK_NONCONVERT 0x1D / HID Intl5 0x8B)
+    //   Key::Lang2 = 変換   (Henkan   / VK_CONVERT    0x1C / HID Intl4 0x8A)
+    // So when controlling a macOS peer we map them by physical/functional
+    // position (left-of-space = alphanumeric, right-of-space = kana):
+    //   無変換 (Lang1) -> 英数 (Eisu),  変換 (Lang2) -> かな (Kana)
+    Lang2, kVK_JIS_Kana,
     F11, kVK_F11,
-    Lang1, kVK_JIS_Kana,
+    Lang1, kVK_JIS_Eisu,
     // PrintScreen, kVK_F13,
     F13, kVK_F13,
     F16, kVK_F16,

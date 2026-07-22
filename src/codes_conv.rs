@@ -204,4 +204,24 @@ mod test {
             }
         }
     }
+
+    // Regression test: Windows JIS Muhenkan/Henkan keys must map to the
+    // matching macOS keys when controlling a macOS peer (Map mode).
+    //   無変換 (Muhenkan / NonConvert, scancode 0x7B) -> macOS 英数 (Eisu, 102)
+    //   変換   (Henkan  / Convert,    scancode 0x79) -> macOS かな (Kana, 104)
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_jis_muhenkan_henkan_to_macos_code() {
+        use crate::keycodes::macos::virtual_keycodes::{kVK_JIS_Eisu, kVK_JIS_Kana};
+        assert_eq!(
+            super::win_scancode_to_macos_code(0x7B),
+            Some(kVK_JIS_Eisu as _),
+            "Muhenkan (0x7B) should map to macOS Eisu"
+        );
+        assert_eq!(
+            super::win_scancode_to_macos_code(0x79),
+            Some(kVK_JIS_Kana as _),
+            "Henkan (0x79) should map to macOS Kana"
+        );
+    }
 }
