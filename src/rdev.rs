@@ -205,7 +205,7 @@ pub enum Key {
     BackSlash,
     IntlBackslash,
     IntlRo,   // Brazilian /? and Japanese _ 'ro'
-    IntlYen,  // Japanese Henkan (Convert) key.
+    IntlYen,  // Japanese yen key.
     KanaMode, // Japanese Hiragana/Katakana key.
     KeyZ,
     KeyX,
@@ -262,6 +262,11 @@ pub enum Key {
     Separator,
     Unknown(u32),
     RawKey(RawKey),
+    // Keep new variants last to preserve existing serialized discriminants.
+    /// Japanese Henkan (Convert) key.
+    Convert,
+    /// Japanese Muhenkan (NonConvert) key.
+    NonConvert,
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -30,9 +30,30 @@ macro_rules! conv_keycodes {
     };
 }
 
+// JIS conversion keys occupy the same physical positions as the corresponding
+// macOS input-mode keys.
+#[allow(non_upper_case_globals)]
+fn macos_target_code_from_key(key: Key) -> Option<KeyCode> {
+    match key {
+        Key::NonConvert => Some(kVK_JIS_Eisu as _),
+        Key::Convert => Some(kVK_JIS_Kana as _),
+        _ => macos_code_from_key(key).map(|code| code as _),
+    }
+}
+
+#[cfg(target_os = "macos")]
+// Preserve the Japanese bottom-row positions when macOS is the source.
+fn windows_target_scancode_from_key(key: Key) -> Option<u32> {
+    match key {
+        Key::Lang2 => win_scancode_from_key(Key::NonConvert),
+        Key::Lang1 => win_scancode_from_key(Key::Convert),
+        _ => win_scancode_from_key(key),
+    }
+}
+
 #[allow(non_upper_case_globals)]
 fn macos_iso_code_from_key(key: Key) -> Option<KeyCode> {
-    match macos_code_from_key(key)? {
+    match macos_target_code_from_key(key)? {
         kVK_ISO_Section => Some(kVK_ANSI_Grave),
         kVK_ANSI_Grave => Some(kVK_ISO_Section),
         code => Some(code as _),
@@ -55,7 +76,7 @@ conv_keycodes!(
 conv_keycodes!(
     win_scancode_to_macos_code,
     win_key_from_scancode,
-    macos_code_from_key
+    macos_target_code_from_key
 );
 #[cfg(target_os = "windows")]
 // From Win scancode to MacOS keycode(ISO Layout)
@@ -81,7 +102,7 @@ conv_keycodes!(
 conv_keycodes!(
     linux_code_to_macos_code,
     linux_key_from_code,
-    macos_code_from_key
+    macos_target_code_from_key
 );
 #[cfg(target_os = "linux")]
 // From Linux scancode to MacOS keycode(ISO Layout)
@@ -100,7 +121,7 @@ conv_keycodes!(
 conv_keycodes!(
     macos_code_to_win_scancode,
     macos_keycode_from_code_,
-    win_scancode_from_key
+    windows_target_scancode_from_key
 );
 #[cfg(target_os = "macos")]
 conv_keycodes!(
@@ -127,7 +148,7 @@ conv_keycodes!(
 conv_keycodes!(
     usb_hid_code_to_macos_code,
     usb_hid_key_from_code,
-    macos_code_from_key
+    macos_target_code_from_key
 );
 conv_keycodes!(
     usb_hid_code_to_macos_iso_code,
@@ -142,6 +163,13 @@ conv_keycodes!(
 
 #[cfg(test)]
 mod test {
+    use crate::keycodes::macos::virtual_keycodes::{kVK_JIS_Eisu, kVK_JIS_Kana};
+
+    const USB_HID_JIS_HENKAN: u32 = 0x8A;
+    const USB_HID_JIS_MUHENKAN: u32 = 0x8B;
+    const WIN_JIS_HENKAN_SCANCODE: u32 = 0x79;
+    const WIN_JIS_MUHENKAN_SCANCODE: u32 = 0x7B;
+
     #[test]
     fn test_usb_hid_code_to_macos_code() {
         for code in 0..=65535 {
@@ -155,12 +183,24 @@ mod test {
                     continue;
                 }
                 if let Some(code2) = super::usb_hid_code_to_macos_code(usb_hid) {
-                    assert_eq!(code, code2 as u32)
+                    assert_eq!(u64::from(code), u64::from(code2))
                 } else {
                     assert!(false, "We could not convert back code: {:?}", code);
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_usb_hid_jis_keys_to_macos_code() {
+        assert_eq!(
+            super::usb_hid_code_to_macos_code(USB_HID_JIS_MUHENKAN),
+            Some(kVK_JIS_Eisu as _)
+        );
+        assert_eq!(
+            super::usb_hid_code_to_macos_code(USB_HID_JIS_HENKAN),
+            Some(kVK_JIS_Kana as _)
+        );
     }
 
     #[test]
@@ -209,19 +249,35 @@ mod test {
     // matching macOS keys when controlling a macOS peer (Map mode).
     //   無変換 (Muhenkan / NonConvert, scancode 0x7B) -> macOS 英数 (Eisu, 102)
     //   変換   (Henkan  / Convert,    scancode 0x79) -> macOS かな (Kana, 104)
-    #[cfg(target_os = "windows")]
     #[test]
     fn test_jis_muhenkan_henkan_to_macos_code() {
-        use crate::keycodes::macos::virtual_keycodes::{kVK_JIS_Eisu, kVK_JIS_Kana};
+        let muhenkan = crate::keycodes::windows::key_from_scancode(WIN_JIS_MUHENKAN_SCANCODE);
+        let henkan = crate::keycodes::windows::key_from_scancode(WIN_JIS_HENKAN_SCANCODE);
+
         assert_eq!(
-            super::win_scancode_to_macos_code(0x7B),
+            super::macos_target_code_from_key(muhenkan),
             Some(kVK_JIS_Eisu as _),
             "Muhenkan (0x7B) should map to macOS Eisu"
         );
         assert_eq!(
-            super::win_scancode_to_macos_code(0x79),
+            super::macos_target_code_from_key(henkan),
             Some(kVK_JIS_Kana as _),
             "Henkan (0x79) should map to macOS Kana"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_macos_jis_keys_to_windows_scancode() {
+        assert_eq!(
+            super::macos_code_to_win_scancode(kVK_JIS_Eisu as _),
+            Some(WIN_JIS_MUHENKAN_SCANCODE as _),
+            "macOS Eisu should map to Windows Muhenkan"
+        );
+        assert_eq!(
+            super::macos_code_to_win_scancode(kVK_JIS_Kana as _),
+            Some(WIN_JIS_HENKAN_SCANCODE as _),
+            "macOS Kana should map to Windows Henkan"
         );
     }
 }
