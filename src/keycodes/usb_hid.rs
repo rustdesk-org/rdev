@@ -157,8 +157,15 @@ decl_keycodes! {
     VolumeUp, 0x80,
     VolumeDown, 0x81,
     VolumeMute, 0x7F,
-    Lang1, 0x8B,
-    Lang2, 0x8A,
+    Convert, 0x8A,
+    NonConvert, 0x8B,
+    // USB HID Usage Tables, Keyboard/Keypad Page (0x07):
+    // https://www.usb.org/sites/default/files/hut1_7.pdf
+    // Keep LANG keys first for HID decoding; Hangul/Hanja are encoding aliases.
+    Lang1, 0x90,
+    Hangul, 0x90,
+    Lang2, 0x91,
+    Hanja, 0x91,
     Lang3, 0x92,
     Lang4, 0x93,
     Lang5, 0x94,
@@ -167,7 +174,6 @@ decl_keycodes! {
     Kana, 0x88,
     Junja, 0x00,
     Final, 0x00,
-    Hanja, 0x91,
     Select, 0x77,
     Print, 0x00,
     Execute, 0x74,

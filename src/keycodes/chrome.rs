@@ -150,8 +150,10 @@ decl_keycodes! {
     VolumeUp, "AudioVolumeUp", // "AudioVolumeUp" (was "VolumeUp" prior to Chrome 52) (⚠️ Not the same on Firefox)
     VolumeDown, "AudioVolumeDown", // "AudioVolumeDown" (was "VolumeDown" prior to Chrome 52) (⚠️ Not the same on Firefox)
     VolumeMute, "AudioVolumeMute", // "AudioVolumeMute" (was "VolumeMute" prior to Chrome 52) (⚠️ Not the same on Firefox)
-    Lang1, "NonConvert", // "NonConvert" (was "" prior to Chrome 48)
-    Lang2, "Convert", // "Convert" (was "" prior to Chrome 48)
+    NonConvert, "NonConvert", // "NonConvert" (was "" prior to Chrome 48)
+    Convert, "Convert", // "Convert" (was "" prior to Chrome 48)
+    Lang1, "Lang1",
+    Lang2, "Lang2",
     Lang3, "Lang3", // "Lang3" (was "" prior to Chrome 48)
     Lang4, "Lang4", // "Lang4" (was "" prior to Chrome 48)
     Lang5, "Lang5", // "Lang5" (was "" prior to Chrome 48) (⚠️ Not the same on Firefox) Lang5 in https://download.microsoft.com/download/1/6/1/161ba512-40e2-4cc9-843a-923143f3456c/translate.pdf is 0x0075, while is "Lang5" in https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/code is 0x005D

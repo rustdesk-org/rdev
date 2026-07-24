@@ -16,6 +16,7 @@ macro_rules! decl_keycodes {
         //TODO: make const when rust lang issue #49146 is fixed
         #[allow(dead_code)]
         pub fn key_from_code(code: u32) -> Key {
+            #[allow(unreachable_patterns)]
             match code {
                 $(
                     $code => Key::$key,
@@ -153,11 +154,19 @@ decl_keycodes!(
     VolumeUp, 0x007B,
     VolumeDown, 0x007A,
     VolumeMute, 0x0079,
-    Lang1, 0x0066,
-    Lang2, 0x0064,
+    NonConvert, 0x0066,
+    Convert, 0x0064,
     Lang3, 0x0062,
     Lang4, 0x0063,
-    Lang5, 0x005d
+    Lang5, 0x005d,
+    // Linux KEY_HANGEUL (122) and KEY_HANJA (123), plus the X11 offset of 8:
+    // https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input-event-codes.h
+    // https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/master/keycodes/evdev
+    // Keep native keys first for X11 decoding; LANG keys are encoding aliases.
+    Hangul, 0x0082,
+    Lang1, 0x0082,
+    Hanja, 0x0083,
+    Lang2, 0x0083
 );
 
 #[cfg(test)]

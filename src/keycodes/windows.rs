@@ -206,17 +206,24 @@ decl_keycodes! {
     VolumeUp, 0x00AF, 0xE030,
     VolumeDown, 0x00AE, 0xE02E,
     VolumeMute, 0x00AD, 0xE020,
-    Lang1, 0x1D, 0x007b,
-    Lang2, 0x1C, 0x0079,
+    NonConvert, 0x1D, 0x007b,
+    Convert, 0x1C, 0x0079,
     Lang3, 0x0000, 0x0078,
     Lang4, 0x0000, 0x0077,
     Lang5, 0x0000, 0x0076,
     Cancel, 0x03, 0x0000,
     Clear, 12, 0x0000,
     Kana, 0x15, 0x0080,
+    // Windows virtual-key names and USB HID-to-scan-code mappings:
+    // https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+    // https://download.microsoft.com/download/1/6/1/161ba512-40e2-4cc9-843a-923143f3456c/translate.pdf
+    // Keep native keys first for scan-code decoding; LANG keys are encoding aliases.
+    Hangul, 0x15, 0x00f2,
+    Lang1, 0x15, 0x00f2,
     Junja, 0x17, 0x0000,
     Final, 0x18, 0x0000,
     Hanja, 0x19, 0x00f1,
+    Lang2, 0x19, 0x00f1,
     Select, 0x29, 0x0000,
     Print, 0x2A, 0x0000,
     Execute, 0x2B, 0x0000,
