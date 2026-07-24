@@ -162,7 +162,9 @@ mod test {
 
     const USB_HID_JIS_HENKAN: u32 = 0x8A;
     const USB_HID_JIS_MUHENKAN: u32 = 0x8B;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     const WIN_JIS_HENKAN_SCANCODE: u32 = 0x79;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     const WIN_JIS_MUHENKAN_SCANCODE: u32 = 0x7B;
     #[cfg(target_os = "macos")]
     const LINUX_X11_JIS_HENKAN_KEYCODE: u32 = 0x64;
@@ -248,18 +250,16 @@ mod test {
     // matching macOS keys when controlling a macOS peer (Map mode).
     //   無変換 (Muhenkan / NonConvert, scancode 0x7B) -> macOS 英数 (Eisu, 102)
     //   変換   (Henkan  / Convert,    scancode 0x79) -> macOS かな (Kana, 104)
+    #[cfg(target_os = "windows")]
     #[test]
     fn test_jis_muhenkan_henkan_to_macos_code() {
-        let muhenkan = crate::keycodes::windows::key_from_scancode(WIN_JIS_MUHENKAN_SCANCODE);
-        let henkan = crate::keycodes::windows::key_from_scancode(WIN_JIS_HENKAN_SCANCODE);
-
         assert_eq!(
-            super::macos_target_code_from_key(muhenkan),
+            super::win_scancode_to_macos_code(WIN_JIS_MUHENKAN_SCANCODE),
             Some(kVK_JIS_Eisu as _),
             "Muhenkan (0x7B) should map to macOS Eisu"
         );
         assert_eq!(
-            super::macos_target_code_from_key(henkan),
+            super::win_scancode_to_macos_code(WIN_JIS_HENKAN_SCANCODE),
             Some(kVK_JIS_Kana as _),
             "Henkan (0x79) should map to macOS Kana"
         );
