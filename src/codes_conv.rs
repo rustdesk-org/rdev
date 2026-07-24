@@ -41,16 +41,6 @@ fn macos_target_code_from_key(key: Key) -> Option<KeyCode> {
     }
 }
 
-#[cfg(target_os = "macos")]
-// Preserve the Japanese bottom-row positions when macOS is the source.
-fn windows_target_scancode_from_key(key: Key) -> Option<u32> {
-    match key {
-        Key::Lang2 => win_scancode_from_key(Key::NonConvert),
-        Key::Lang1 => win_scancode_from_key(Key::Convert),
-        _ => win_scancode_from_key(key),
-    }
-}
-
 #[allow(non_upper_case_globals)]
 fn macos_iso_code_from_key(key: Key) -> Option<KeyCode> {
     match macos_target_code_from_key(key)? {
@@ -63,7 +53,12 @@ fn macos_iso_code_from_key(key: Key) -> Option<KeyCode> {
 #[cfg(target_os = "macos")]
 #[allow(non_upper_case_globals)]
 fn macos_keycode_from_code_(code: KeyCode) -> Key {
-    macos_key_from_code(map_keycode(code))
+    // Preserve the Japanese bottom-row positions when macOS is the source.
+    match macos_key_from_code(map_keycode(code)) {
+        Key::Lang2 => Key::NonConvert,
+        Key::Lang1 => Key::Convert,
+        key => key,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -121,7 +116,7 @@ conv_keycodes!(
 conv_keycodes!(
     macos_code_to_win_scancode,
     macos_keycode_from_code_,
-    windows_target_scancode_from_key
+    win_scancode_from_key
 );
 #[cfg(target_os = "macos")]
 conv_keycodes!(
@@ -169,6 +164,10 @@ mod test {
     const USB_HID_JIS_MUHENKAN: u32 = 0x8B;
     const WIN_JIS_HENKAN_SCANCODE: u32 = 0x79;
     const WIN_JIS_MUHENKAN_SCANCODE: u32 = 0x7B;
+    #[cfg(target_os = "macos")]
+    const LINUX_X11_JIS_HENKAN_KEYCODE: u32 = 0x64;
+    #[cfg(target_os = "macos")]
+    const LINUX_X11_JIS_MUHENKAN_KEYCODE: u32 = 0x66;
 
     #[test]
     fn test_usb_hid_code_to_macos_code() {
@@ -278,6 +277,21 @@ mod test {
             super::macos_code_to_win_scancode(kVK_JIS_Kana as _),
             Some(WIN_JIS_HENKAN_SCANCODE as _),
             "macOS Kana should map to Windows Henkan"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_macos_jis_keys_to_linux_keycode() {
+        assert_eq!(
+            super::macos_code_to_linux_code(kVK_JIS_Eisu as _),
+            Some(LINUX_X11_JIS_MUHENKAN_KEYCODE as _),
+            "macOS Eisu should map to Linux Muhenkan"
+        );
+        assert_eq!(
+            super::macos_code_to_linux_code(kVK_JIS_Kana as _),
+            Some(LINUX_X11_JIS_HENKAN_KEYCODE as _),
+            "macOS Kana should map to Linux Henkan"
         );
     }
 }
