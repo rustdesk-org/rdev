@@ -182,7 +182,7 @@ pub unsafe fn convert(
                 event => Some(EventType::ButtonRelease(Button::Unknown(event as u8))),
             }
         }
-        CGEventType::MouseMoved => {
+        CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged | CGEventType::OtherMouseDragged => {
             let point = cg_event.location();
             Some(EventType::MouseMove {
                 x: point.x,
