@@ -333,6 +333,7 @@ pub enum EventType {
 
 /// The Unicode information of input.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct UnicodeInfo {
     pub name: Option<String>,
     pub unicode: Vec<u16>,
