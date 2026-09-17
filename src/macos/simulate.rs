@@ -22,6 +22,44 @@ pub fn set_keyboard_extra_info(extra: i64) {
     unsafe { KEYBOARD_EXTRA_INFO = extra }
 }
 
+// https://github.com/rustdesk/rustdesk/issues/16227
+#[allow(non_upper_case_globals)]
+fn normalize_text_key_event(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
+    // Clear only NumericPad on text-key down/up; preserve the keycode and all other bits.
+    // No OS/layout/dead-key checks or character inspection: ordinary text keys count too.
+    //
+    // In RustDesk's Map path, the sender supplies the key position and down/up; Quartz sets
+    // NumericPad on macOS. It identifies keypad events, including key-up, not Windows Num Lock.
+    // On macOS 27, keypad 0 down/up left NumericPad in CombinedSessionState, and
+    // CGEventCreateKeyboardEvent inherited it for the Spanish acute dead key. This retention
+    // is observed behavior, not an API guarantee. NSMenu then indexed the dead key's empty
+    // charactersIgnoringModifiers, raising NSInvalidArgumentException. Apple's guide checks
+    // for empty strings before characterAtIndex:0 (Listing 5-4):
+    // https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingKeyEvents/HandlingKeyEvents.html
+    //
+    // Clearing only on keypad release would alter the keypad key-up's identification flag,
+    // risking inconsistent down/up handling in apps. It would also miss overlapping input:
+    // keypad 0 down -> acute down -> keypad 0 up; the dead key arrives before release cleanup.
+    // These are compatibility/timing concerns; the release-only alternative is untested.
+    // Existing arrow-key release workarounds are separate and are not extended to keypad keys.
+    //
+    // This helper leaves keypad/navigation/function keys and events without NumericPad unchanged.
+    // Existing key-up workarounds still apply. Dead keys outside the filter and NumericPad added
+    // later are not covered. Apps/IMEs/remappers using this flag on text keys may change text/shortcuts.
+    // The ANSI range includes ISO Section; exclude Return/Tab. JIS Yen and Underscore are also text keys.
+    let is_text_key = matches!(
+        keycode,
+        kVK_ANSI_A..=kVK_ANSI_Grave | kVK_JIS_Yen | kVK_JIS_Underscore
+    ) && !matches!(keycode, kVK_Return | kVK_Tab);
+    let flags = event.get_flags();
+    if is_text_key && flags.contains(CGEventFlags::CGEventFlagNumericPad) {
+        log::debug!("Clearing NumericPad flag from macOS text key {keycode}");
+        // Sub preserves unknown system flags on older bitflags 1.x; ! truncates them.
+        event.set_flags(flags - CGEventFlags::CGEventFlagNumericPad);
+    }
+    event
+}
+
 #[allow(non_upper_case_globals)]
 fn workaround_fn(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
     match keycode {
@@ -59,7 +97,7 @@ fn workaround_fn(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
         }
         _ => {}
     }
-    event
+    normalize_text_key_event(event, keycode)
 }
 
 unsafe fn convert_native_with_source(
@@ -73,6 +111,7 @@ unsafe fn convert_native_with_source(
                     CGEvent::new_keyboard_event(source, *keycode as _, true)
                         // Don't use `workaround_fn()` for `KeyPress`, or `F11` will not work.
                         // .and_then(|event| Ok(workaround_fn(event, *keycode)))
+                        .map(|event| normalize_text_key_event(event, *keycode))
                         .ok()
                 } else {
                     None
@@ -83,6 +122,7 @@ unsafe fn convert_native_with_source(
                 CGEvent::new_keyboard_event(source, code as _, true)
                     // Don't use `workaround_fn()` for `KeyPress`, or `F11` will not work.
                     // .and_then(|event| Ok(workaround_fn(event, code as _)))
+                    .map(|event| normalize_text_key_event(event, code))
                     .ok()
             }
         },
@@ -204,5 +244,57 @@ impl VirtualInput {
     // keycode is defined in rdev::macos::virtual_keycodes
     pub fn get_key_state(state_id: CGEventSourceStateID, keycode: CGKeyCode) -> bool {
         unsafe { CGEventSourceKeyState(state_id, keycode) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event_with_numeric_pad(keycode: CGKeyCode, down: bool) -> CGEvent {
+        const SYSTEM_EVENT_FLAG: u64 = 0x20000000;
+        let source = CGEventSource::new(CGEventSourceStateID::Private).unwrap();
+        let event = CGEvent::new_keyboard_event(source, keycode, down).unwrap();
+        let flags = CGEventFlags::CGEventFlagNumericPad
+            | CGEventFlags::CGEventFlagShift
+            | CGEventFlags::CGEventFlagSecondaryFn;
+        // SAFETY: CGEventFlags is a repr(C) u64 wrapper, including with bitflags 1.0.
+        event.set_flags(unsafe { std::mem::transmute(flags.bits() | SYSTEM_EVENT_FLAG) });
+        event
+    }
+
+    #[test]
+    fn text_key_events_clear_only_numeric_pad() {
+        for down in [false, true] {
+            let event = event_with_numeric_pad(kVK_ANSI_Quote, down);
+            let bits = event.get_flags().bits();
+            let event = if down {
+                normalize_text_key_event(event, kVK_ANSI_Quote)
+            } else {
+                workaround_fn(event, kVK_ANSI_Quote)
+            };
+            assert_eq!(
+                event.get_flags().bits(),
+                bits & !CGEventFlags::CGEventFlagNumericPad.bits(),
+                "key down: {down}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalization_preserves_non_text_key_flags() {
+        let keys = [
+            kVK_ANSI_Keypad0,
+            kVK_LeftArrow,
+            kVK_F11,
+            kVK_Return,
+            kVK_Tab,
+        ];
+        for keycode in keys {
+            let event = event_with_numeric_pad(keycode, true);
+            let flags = event.get_flags();
+            let event = normalize_text_key_event(event, keycode);
+            assert_eq!(event.get_flags(), flags, "keycode {keycode}");
+        }
     }
 }
