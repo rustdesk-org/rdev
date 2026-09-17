@@ -55,7 +55,8 @@ fn normalize_text_key_event(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
     if is_text_key && flags.contains(CGEventFlags::CGEventFlagNumericPad) {
         log::debug!("Clearing NumericPad flag from macOS text key {keycode}");
         // bitflags 1.x's `!` drops unnamed system flags; difference preserves them.
-        event.set_flags(flags.difference(CGEventFlags::CGEventFlagNumericPad));
+        // Sub preserves unknown system flags and supports older bitflags 1.x.
+        event.set_flags(flags - CGEventFlags::CGEventFlagNumericPad);
     }
     event
 }
