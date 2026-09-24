@@ -224,7 +224,7 @@ pub use crate::rdev::{
 };
 
 mod keycodes;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -267,9 +267,9 @@ pub use core_graphics::{event::CGEventTapLocation, event_source::CGEventSourceSt
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
 pub use crate::keycodes::linux::{code_from_key, key_from_code};
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 use crate::linux::{display_size as _display_size, listen as _listen, simulate as _simulate};
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub use crate::linux::{simulate_char, simulate_unicode, Keyboard};
 
 #[cfg(target_os = "windows")]
@@ -304,7 +304,7 @@ pub use crate::rdev::UnicodeInfo;
 ///     }
 /// }
 /// ```
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
     T: FnMut(Event) + 'static,
@@ -344,7 +344,7 @@ where
 ///     });
 /// }
 /// ```
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
 pub fn simulate(event_type: &EventType) -> Result<(), SimulateError> {
     _simulate(event_type)
 }
@@ -358,12 +358,12 @@ pub fn simulate(event_type: &EventType) -> Result<(), SimulateError> {
 /// let (w, h) = display_size().unwrap();
 /// println!("My screen size : {:?}x{:?}", w, h);
 /// ```
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
 pub fn display_size() -> Result<(u64, u64), DisplayError> {
     _display_size()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub use crate::linux::{
     disable_grab, enable_grab, exit_grab_listen, is_grabbed, start_grab_listen,
 };
@@ -415,7 +415,7 @@ where
     _grab(callback)
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
 pub(crate) fn keyboard_only() -> bool {
     !std::env::var("KEYBOARD_ONLY")
         .unwrap_or_default()
