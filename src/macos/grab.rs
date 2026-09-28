@@ -52,7 +52,7 @@ where
         let _pool = NSAutoreleasePool::new(nil);
         let tap = CGEventTapCreate(
             CGEventTapLocation::Session, // HID, Session, AnnotatedSession,
-            kCGHeadInsertEventTap,
+            kCGTailAppendEventTap,
             CGEventTapOption::Default,
             kCGEventMaskForAllEvents,
             raw_callback,
