@@ -28,7 +28,11 @@ macro_rules! log_simulation_error {
             }
         };
         if let Some(count) = count {
-            log::error!("{} (x{})", format_args!($($arg)+), count);
+            log::error!(
+                "{} failures at this log site since last report; latest error: {}",
+                count,
+                format_args!($($arg)+)
+            );
         }
     }};
 }
@@ -297,12 +301,11 @@ pub struct VirtualInput {
 impl VirtualInput {
     pub fn new(state_id: CGEventSourceStateID, tap_loc: CGEventTapLocation) -> Result<Self, ()> {
         Ok(Self {
-            source: CGEventSource::new(state_id).map_err(|err| {
+            source: CGEventSource::new(state_id).inspect_err(|_| {
                 log_simulation_error!(
                     "Failed to create macOS input source {:?}: CGEventSourceCreate returned null",
                     state_id
                 );
-                err
             })?,
             tap_loc,
         })

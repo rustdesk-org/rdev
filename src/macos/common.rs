@@ -168,13 +168,13 @@ pub unsafe fn convert(
     let option_type = match _type {
         CGEventType::TapDisabledByTimeout => {
             log::error!(
-                "macOS event tap disabled by timeout; input capture may miss key-up events"
+                "macOS event tap disabled by timeout; capture through this tap has stopped and pending key-up events may be lost"
             );
             None
         }
         CGEventType::TapDisabledByUserInput => {
             log::error!(
-                "macOS event tap disabled by user input; input capture may miss key-up events"
+                "macOS event tap disabled by user input; capture through this tap has stopped and pending key-up events may be lost"
             );
             None
         }
