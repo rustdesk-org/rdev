@@ -48,6 +48,17 @@ pub fn set_keyboard_extra_info(extra: i64) {
     unsafe { KEYBOARD_EXTRA_INFO = extra }
 }
 
+fn event_type_name(event_type: &EventType) -> &'static str {
+    match event_type {
+        EventType::KeyPress(_) => "KeyPress",
+        EventType::KeyRelease(_) => "KeyRelease",
+        EventType::ButtonPress(_) => "ButtonPress",
+        EventType::ButtonRelease(_) => "ButtonRelease",
+        EventType::MouseMove { .. } => "MouseMove",
+        EventType::Wheel { .. } => "Wheel",
+    }
+}
+
 // https://github.com/rustdesk/rustdesk/issues/16227
 #[allow(non_upper_case_globals)]
 fn normalize_text_key_event(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
@@ -79,7 +90,7 @@ fn normalize_text_key_event(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
     ) && !matches!(keycode, kVK_Return | kVK_Tab);
     let flags = event.get_flags();
     if is_text_key && flags.contains(CGEventFlags::CGEventFlagNumericPad) {
-        log::debug!("Clearing NumericPad flag from macOS text key {keycode}");
+        log::debug!("Clearing NumericPad flag from macOS text key event");
         // Sub preserves unknown system flags on older bitflags 1.x; ! truncates them.
         event.set_flags(flags - CGEventFlags::CGEventFlagNumericPad);
     }
@@ -135,18 +146,20 @@ unsafe fn convert_native_with_source(
             crate::Key::RawKey(rawkey) => {
                 if let RawKey::MacVirtualKeycode(keycode) = rawkey {
                     CGEvent::new_keyboard_event(source, *keycode as _, true)
-                        .map_err(|_| log_simulation_error!(
-                            "Failed to create macOS {:?} (keycode {}): CGEventCreateKeyboardEvent returned null",
-                            event_type, keycode
-                        ))
+                        .map_err(|_| {
+                            log_simulation_error!(
+                                "Failed to create macOS {}: CGEventCreateKeyboardEvent returned null",
+                                event_type_name(event_type)
+                            );
+                        })
                         // Don't use `workaround_fn()` for `KeyPress`, or `F11` will not work.
                         // .and_then(|event| Ok(workaround_fn(event, *keycode)))
                         .map(|event| normalize_text_key_event(event, *keycode))
                         .ok()
                 } else {
                     log_simulation_error!(
-                        "Failed to convert macOS {:?}: raw key is not a MacVirtualKeycode",
-                        event_type
+                        "Failed to convert macOS {}: raw key is not a MacVirtualKeycode",
+                        event_type_name(event_type)
                     );
                     None
                 }
@@ -154,16 +167,18 @@ unsafe fn convert_native_with_source(
             _ => {
                 let code = code_from_key(*key).or_else(|| {
                     log_simulation_error!(
-                        "Failed to convert macOS {:?}: no macOS keycode mapping",
-                        event_type
+                        "Failed to convert macOS {}: no macOS keycode mapping",
+                        event_type_name(event_type)
                     );
                     None
                 })?;
                 CGEvent::new_keyboard_event(source, code as _, true)
-                    .map_err(|_| log_simulation_error!(
-                        "Failed to create macOS {:?} (keycode {}): CGEventCreateKeyboardEvent returned null",
-                        event_type, code
-                    ))
+                    .map_err(|_| {
+                        log_simulation_error!(
+                            "Failed to create macOS {}: CGEventCreateKeyboardEvent returned null",
+                            event_type_name(event_type)
+                        );
+                    })
                     // Don't use `workaround_fn()` for `KeyPress`, or `F11` will not work.
                     // .and_then(|event| Ok(workaround_fn(event, code as _)))
                     .map(|event| normalize_text_key_event(event, code))
@@ -174,16 +189,18 @@ unsafe fn convert_native_with_source(
             crate::Key::RawKey(rawkey) => {
                 if let RawKey::MacVirtualKeycode(keycode) = rawkey {
                     CGEvent::new_keyboard_event(source, *keycode as _, false)
-                        .map_err(|_| log_simulation_error!(
-                            "Failed to create macOS {:?} (keycode {}): CGEventCreateKeyboardEvent returned null",
-                            event_type, keycode
-                        ))
+                        .map_err(|_| {
+                            log_simulation_error!(
+                                "Failed to create macOS {}: CGEventCreateKeyboardEvent returned null",
+                                event_type_name(event_type)
+                            );
+                        })
                         .and_then(|event| Ok(workaround_fn(event, *keycode)))
                         .ok()
                 } else {
                     log_simulation_error!(
-                        "Failed to convert macOS {:?}: raw key is not a MacVirtualKeycode",
-                        event_type
+                        "Failed to convert macOS {}: raw key is not a MacVirtualKeycode",
+                        event_type_name(event_type)
                     );
                     None
                 }
@@ -191,16 +208,18 @@ unsafe fn convert_native_with_source(
             _ => {
                 let code = code_from_key(*key).or_else(|| {
                     log_simulation_error!(
-                        "Failed to convert macOS {:?}: no macOS keycode mapping",
-                        event_type
+                        "Failed to convert macOS {}: no macOS keycode mapping",
+                        event_type_name(event_type)
                     );
                     None
                 })?;
                 CGEvent::new_keyboard_event(source, code as _, false)
-                    .map_err(|_| log_simulation_error!(
-                        "Failed to create macOS {:?} (keycode {}): CGEventCreateKeyboardEvent returned null",
-                        event_type, code
-                    ))
+                    .map_err(|_| {
+                        log_simulation_error!(
+                            "Failed to create macOS {}: CGEventCreateKeyboardEvent returned null",
+                            event_type_name(event_type)
+                        );
+                    })
                     .and_then(|event| Ok(workaround_fn(event, code as _)))
                     .ok()
             }
@@ -259,8 +278,8 @@ unsafe fn convert_native(event_type: &EventType) -> Option<CGEvent> {
     // https://developer.apple.com/documentation/coregraphics/cgeventsourcestateid#:~:text=kCGEventSourceStatePrivate
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| log_simulation_error!(
-            "Failed to create macOS input source for {:?}: CGEventSourceCreate(HIDSystemState) returned null",
-            event_type
+            "Failed to create macOS input source for {}: CGEventSourceCreate(HIDSystemState) returned null",
+            event_type_name(event_type)
         ))
         .ok()?;
     convert_native_with_source(event_type, source)
@@ -282,8 +301,8 @@ pub fn simulate(event_type: &EventType) -> Result<(), SimulateError> {
                 EventType::KeyPress(_) | EventType::KeyRelease(_)
             ) {
                 log::trace!(
-                    "macOS CGEventPost returned for {:?} at HID; delivery is unconfirmed",
-                    event_type
+                    "macOS CGEventPost returned for {} at HID; delivery is unconfirmed",
+                    event_type_name(event_type)
                 );
             }
             Ok(())
@@ -320,8 +339,8 @@ impl VirtualInput {
                     EventType::KeyPress(_) | EventType::KeyRelease(_)
                 ) {
                     log::trace!(
-                        "macOS CGEventPost returned for {:?} at {:?}; delivery is unconfirmed",
-                        event_type,
+                        "macOS CGEventPost returned for {} at {:?}; delivery is unconfirmed",
+                        event_type_name(event_type),
                         self.tap_loc
                     );
                 }
