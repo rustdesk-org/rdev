@@ -1,12 +1,13 @@
 #![allow(clippy::upper_case_acronyms)]
 use crate::keycodes::macos::virtual_keycodes::*;
 use crate::macos::keyboard::Keyboard;
-use crate::rdev::{Button, Event, EventType, Key};
+use crate::rdev::{Button, Event, EventType, Key, UnicodeInfo};
 use cocoa::base::id;
 use core_graphics::{
     event::{CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode, EventField},
     event_source::CGEventSourceStateID,
 };
+use foreign_types::ForeignType;
 use lazy_static::lazy_static;
 use std::convert::TryInto;
 use std::os::raw::c_void;
@@ -14,6 +15,40 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 
 use crate::keycodes::macos::key_from_code;
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn CGEventKeyboardGetUnicodeString(
+        event: *const c_void,
+        max_string_length: usize,
+        actual_string_length: *mut usize,
+        unicode_string: *mut u16,
+    );
+}
+
+unsafe fn event_unicode(cg_event: &CGEvent) -> Option<UnicodeInfo> {
+    let mut length = 0;
+    CGEventKeyboardGetUnicodeString(cg_event.as_ptr() as _, 0, &mut length, std::ptr::null_mut());
+    if length == 0 {
+        return None;
+    }
+    let mut chars = vec![0u16; length];
+    CGEventKeyboardGetUnicodeString(
+        cg_event.as_ptr() as _,
+        chars.len(),
+        &mut length,
+        chars.as_mut_ptr(),
+    );
+    if length > chars.len() {
+        return None;
+    }
+    let name = String::from_utf16(&chars[..length]).ok()?;
+    Some(UnicodeInfo {
+        name: Some(name),
+        unicode: chars[..length].to_vec(),
+        is_dead: false,
+    })
+}
 
 pub type CFMachPortRef = *const c_void;
 pub type CFIndex = u64;
@@ -43,6 +78,8 @@ pub const kKeyboardUnknown: PhysicalKeyboardLayoutType = 1061109567;
 pub type CGEventTapPlacement = u32;
 #[allow(non_upper_case_globals)]
 pub const kCGHeadInsertEventTap: u32 = 0;
+#[allow(non_upper_case_globals)]
+pub const kCGTailAppendEventTap: u32 = 1;
 
 // https://developer.apple.com/documentation/coregraphics/cgeventtapoptions?language=objc
 #[allow(non_upper_case_globals)]
@@ -243,7 +280,12 @@ pub unsafe fn convert(
                     None
                 } else {
                     let flags = cg_event.get_flags();
-                    let s = keyboard_state.create_unicode_for_key(code, flags);
+                    let layout_unicode = keyboard_state.create_unicode_for_key(code, flags);
+                    let s = if code == 0 {
+                        event_unicode(cg_event).or(layout_unicode)
+                    } else {
+                        layout_unicode
+                    };
                     // if s.is_none() {
                     //     s = Some(key_to_name(_k).to_owned())
                     // }
@@ -325,6 +367,23 @@ fn key_to_name(key: Key) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_graphics::event_source::CGEventSource;
+
+    #[test]
+    fn uses_unicode_embedded_in_synthetic_key_event() {
+        let source = CGEventSource::new(CGEventSourceStateID::Private).unwrap();
+        let event = CGEvent::new_keyboard_event(source, 0, true).unwrap();
+        let text = "Tiếng Việt ".repeat(8);
+        event.set_string(&text);
+        let mut keyboard = Keyboard::new().unwrap();
+
+        let converted = unsafe { convert(CGEventType::KeyDown, &event, &mut keyboard) }.unwrap();
+        assert_eq!(
+            converted.unicode.unwrap().name.as_deref(),
+            Some(text.as_str())
+        );
+    }
+
     #[test]
     #[allow(non_snake_case)]
     fn test_KBGetLayoutType() {
