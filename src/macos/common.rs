@@ -166,6 +166,18 @@ pub unsafe fn convert(
 ) -> Option<Event> {
     let mut code = 0;
     let option_type = match _type {
+        CGEventType::TapDisabledByTimeout => {
+            log::error!(
+                "macOS event tap disabled by timeout; capture through this tap has stopped and pending key-up events may be lost"
+            );
+            None
+        }
+        CGEventType::TapDisabledByUserInput => {
+            log::error!(
+                "macOS event tap disabled by user input; capture through this tap has stopped and pending key-up events may be lost"
+            );
+            None
+        }
         CGEventType::LeftMouseDown => Some(EventType::ButtonPress(Button::Left)),
         CGEventType::LeftMouseUp => Some(EventType::ButtonRelease(Button::Left)),
         CGEventType::RightMouseDown => Some(EventType::ButtonPress(Button::Right)),
