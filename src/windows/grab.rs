@@ -99,7 +99,10 @@ unsafe extern "system" fn raw_callback_keyboard(code: i32, param: usize, lpdata:
     })
 }
 
-// Preserve packet identity for grab without changing the legacy listen conversion.
+// Decode Unicode packets directly for grab, without physical-key translation.
+// listen() shares the packet-preserving helpers but does not populate UnicodeInfo.
+// Each packet carries one UTF-16 code unit. Surrogates retain their raw payload
+// even when UnicodeInfo.name is None; consumers must assemble surrogate pairs.
 unsafe fn handle_unicode_packet(code: i32, param: usize, lpdata: isize) -> Option<isize> {
     const BLOCK_EVENT: isize = 1;
     if code != HC_ACTION {
