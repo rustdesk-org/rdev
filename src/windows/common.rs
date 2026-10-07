@@ -38,16 +38,17 @@ pub fn get_modifier(key: Key) -> bool {
 
 pub unsafe fn get_code(lpdata: LPARAM) -> DWORD {
     let kb = *(lpdata as *const KBDLLHOOKSTRUCT);
-    // https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes#:~:text=OEM%20specific-,VK_PACKET,-0xE7
-    if kb.vkCode == VK_PACKET as u32 {
-        kb.scanCode
-    } else {
-        kb.vkCode
-    }
+    kb.vkCode
 }
 
 pub unsafe fn get_scan_code(lpdata: LPARAM) -> DWORD {
     let kb = *(lpdata as *const KBDLLHOOKSTRUCT);
+    // VK_PACKET carries a UTF-16 code unit, not a physical scan code.
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-keybdinput
+    // If the virtual key code is VK_PACKET, the scan code is actually a UTF-16 code unit.
+    if kb.vkCode == VK_PACKET as u32 {
+        return kb.scanCode;
+    }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#:~:text=The%20right%2Dhand%20SHIFT%20key%20is%20not%20considered%20an%20extended%2Dkey%2C%20it%20has%20a%20separate%20scan%20code%20instead.
     // The right-hand SHIFT key is not considered an extended-key, it has a separate scan code instead.
     match kb.scanCode {
