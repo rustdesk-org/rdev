@@ -1,5 +1,5 @@
 use crate::{
-    rdev::{Event, EventType, GrabError},
+    rdev::{Event, EventType, GrabError, Key, UnicodeInfo},
     windows::common::{convert, get_scan_code, HookError, KEYBOARD},
 };
 use std::{io::Error, ptr::null_mut, sync::Mutex, time::SystemTime};
@@ -16,7 +16,8 @@ use winapi::{
         winuser::{
             CallNextHookEx, DispatchMessageA, GetMessageA, PostThreadMessageA, SetWindowsHookExA,
             TranslateMessage, UnhookWindowsHookEx, HC_ACTION, MSG, PKBDLLHOOKSTRUCT,
-            PMOUSEHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_USER,
+            PMOUSEHOOKSTRUCT, VK_PACKET, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
+            WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
         },
     },
 };
@@ -90,8 +91,54 @@ unsafe extern "system" fn raw_callback_mouse(code: i32, param: usize, lpdata: is
 }
 
 unsafe extern "system" fn raw_callback_keyboard(code: i32, param: usize, lpdata: isize) -> isize {
+    if let Some(result) = handle_unicode_packet(code, param, lpdata) {
+        return result;
+    }
     raw_callback(code, param, lpdata, |data: isize| unsafe {
         (*(data as PKBDLLHOOKSTRUCT)).dwExtraInfo
+    })
+}
+
+// Preserve packet identity for grab without changing the legacy listen conversion.
+unsafe fn handle_unicode_packet(code: i32, param: usize, lpdata: isize) -> Option<isize> {
+    const BLOCK_EVENT: isize = 1;
+    if code != HC_ACTION {
+        return None;
+    }
+    let packet = &*(lpdata as PKBDLLHOOKSTRUCT);
+    if packet.vkCode != VK_PACKET as u32 {
+        return None;
+    }
+    let key = Key::Unknown(packet.vkCode);
+    let event_type = match param as u32 {
+        WM_KEYDOWN | WM_SYSKEYDOWN => EventType::KeyPress(key),
+        WM_KEYUP | WM_SYSKEYUP => EventType::KeyRelease(key),
+        _ => return None,
+    };
+    let callback = GLOBAL_CALLBACK.as_mut()?;
+    let unicode = if GET_KEY_UNICODE && matches!(event_type, EventType::KeyPress(_)) {
+        let unicode = vec![packet.scanCode as u16];
+        Some(UnicodeInfo {
+            name: String::from_utf16(&unicode).ok(),
+            unicode,
+            is_dead: false,
+        })
+    } else {
+        None
+    };
+    let event = Event {
+        event_type,
+        time: SystemTime::now(),
+        unicode,
+        platform_code: packet.vkCode,
+        position_code: packet.scanCode,
+        usb_hid: 0,
+        extra_data: packet.dwExtraInfo,
+    };
+    Some(if callback(event).is_none() {
+        BLOCK_EVENT
+    } else {
+        CallNextHookEx(null_mut(), code, param, lpdata)
     })
 }
 
