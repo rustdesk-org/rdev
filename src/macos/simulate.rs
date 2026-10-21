@@ -98,6 +98,26 @@ fn normalize_text_key_event(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
     event
 }
 
+// Keys whose events macOS creates with `CGEventFlagSecondaryFn` set: the keys `workaround_fn`
+// clears it from on key-up. Their key-down keeps it (`F11` does not work without it), so
+// `VirtualInput` leaves Fn as created on those key-downs. A test checks the two lists agree.
+#[allow(non_upper_case_globals)]
+fn has_intrinsic_fn(keycode: CGKeyCode) -> bool {
+    matches!(
+        keycode,
+        kVK_F1 | kVK_F2 | kVK_F3 | kVK_F4 | kVK_F5 | kVK_F6 | kVK_F7 | kVK_F8 | kVK_F9
+            | kVK_F10 | kVK_F11 | kVK_F12 | kVK_F13 | kVK_F14 | kVK_F15 | kVK_F16 | kVK_F17
+            | kVK_F18 | kVK_F19 | kVK_ANSI_KeypadClear | kVK_ForwardDelete | kVK_Home
+            | kVK_End | kVK_PageDown | kVK_PageUp
+            | 129 // Spotlight Search
+            | 130 // Application
+            | 131 // Launchpad
+            | 144 // Brightness Up
+            | 145 // Brightness Down
+            | kVK_UpArrow | kVK_DownArrow | kVK_LeftArrow | kVK_RightArrow | kVK_Help
+    )
+}
+
 #[allow(non_upper_case_globals)]
 fn workaround_fn(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
     match keycode {
@@ -323,8 +343,9 @@ pub fn simulate(event_type: &EventType) -> Result<(), SimulateError> {
 // guarantee: we did not find which part of the pipeline lags.
 //
 // The same was observed for Fn (the Globe key) after Home, End and similar keys, which macOS
-// marks with Fn: `workaround_fn` clears it on those keys, but the next keys could still inherit
-// it from the state, so a letter became a Globe shortcut (Globe+E opens the emoji picker).
+// creates with Fn set: `workaround_fn` clears it on their key-up, but the next keys could still
+// inherit it from the state, so a letter became a Globe shortcut (Globe+E opens the emoji
+// picker). Those keys keep their own Fn on key-down; see `has_intrinsic_fn`.
 // https://github.com/rustdesk/rustdesk/issues/10126
 //
 // VirtualInput therefore records which modifier keys it has pressed and not released, and
@@ -439,8 +460,12 @@ impl VirtualInput {
             .iter()
             .filter(|(_, _, bit)| held & bit != 0)
             .fold(0, |wanted, (_, flag, bit)| wanted | flag | bit);
+        let mut mask = modifier_mask();
+        if down && has_intrinsic_fn(keycode) {
+            mask &= !CGEventFlags::CGEventFlagSecondaryFn.bits();
+        }
         let flags = event.get_flags().bits();
-        let stamped = (flags & !modifier_mask()) | wanted;
+        let stamped = (flags & !mask) | wanted;
         if stamped != flags {
             log::debug!("Correcting inherited modifier flags on macOS key event");
             // SAFETY: CGEventFlags is a repr(C) u64 wrapper, including with bitflags 1.0.
@@ -531,6 +556,7 @@ mod tests {
 
     const SHIFT: u64 = 0x0002_0000;
     const LEFT_SHIFT: u64 = 0x0000_0002;
+    const RIGHT_SHIFT: u64 = 0x0000_0004;
     const CAPS_LOCK: u64 = 0x0001_0000;
     const FN: u64 = 0x0080_0000;
     const SYSTEM_EVENT_FLAG: u64 = 0x2000_0000;
@@ -606,6 +632,53 @@ mod tests {
         stamped(&input, &EventType::KeyRelease(globe), FN);
         let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyE), FN);
         assert_eq!(flags & FN, 0);
+    }
+
+    fn raw(keycode: CGKeyCode) -> crate::Key {
+        crate::Key::RawKey(RawKey::MacVirtualKeycode(keycode as _))
+    }
+
+    #[test]
+    fn intrinsic_fn_keys_match_workaround_fn() {
+        let source = CGEventSource::new(CGEventSourceStateID::Private).unwrap();
+        for keycode in 0..=255 {
+            let event = CGEvent::new_keyboard_event(source.clone(), keycode, false).unwrap();
+            // SAFETY: CGEventFlags is a repr(C) u64 wrapper, including with bitflags 1.0.
+            event.set_flags(unsafe { std::mem::transmute::<u64, CGEventFlags>(FN) });
+            let cleared = workaround_fn(event, keycode).get_flags().bits() & FN == 0;
+            assert_eq!(cleared, has_intrinsic_fn(keycode), "keycode {keycode}");
+        }
+    }
+
+    #[test]
+    fn function_and_navigation_key_downs_keep_intrinsic_fn() {
+        for keycode in [kVK_F11, kVK_Home, kVK_End, kVK_LeftArrow, kVK_ForwardDelete] {
+            let input = virtual_input();
+            let flags = stamped(&input, &EventType::KeyPress(raw(keycode)), FN);
+            assert_eq!(flags & FN, FN, "key down {keycode}");
+            let flags = stamped(&input, &EventType::KeyRelease(raw(keycode)), FN);
+            assert_eq!(flags & FN, 0, "key up {keycode}");
+        }
+    }
+
+    #[test]
+    fn releasing_one_shift_keeps_the_other() {
+        let input = virtual_input();
+        stamped(&input, &EventType::KeyPress(raw(kVK_Shift)), 0);
+        stamped(&input, &EventType::KeyPress(raw(kVK_RightShift)), SHIFT);
+        stamped(&input, &EventType::KeyRelease(raw(kVK_Shift)), SHIFT);
+        let flags = stamped(
+            &input,
+            &EventType::KeyPress(crate::Key::KeyA),
+            SHIFT | LEFT_SHIFT,
+        );
+        assert_eq!(
+            flags & (SHIFT | LEFT_SHIFT | RIGHT_SHIFT),
+            SHIFT | RIGHT_SHIFT
+        );
+        stamped(&input, &EventType::KeyRelease(raw(kVK_RightShift)), SHIFT);
+        let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyA), SHIFT);
+        assert_eq!(flags & SHIFT, 0);
     }
 
     #[test]
