@@ -168,28 +168,6 @@ let string = keyboard.add(&EventType::KeyPress(Key::KeyS));
 // string == Some("s")
 ```
 
-## Linux X11 keyboard capture
-
-`start_grab_listen` uses ordinary X11 capture by default. Capturing Unicode
-Auto-Type that uses temporary key mappings, such as KeePassXC's X11 Auto-Type,
-requires experimental RECORD capture. Set the variable in the application's
-environment before capture starts:
-
-```sh
-RDEV_ENABLE_RECORD=1 /path/to/application
-```
-
-Only the exact value `1` enables RECORD; all other values, including an unset
-variable, leave it disabled. This setting does not affect `listen()` or add native
-Wayland support.
-
-If RECORD is unavailable or initialization fails after one retry, ordinary
-capture is used. Invalid RECORD lengths or key-event data also cause runtime
-fallback. During that transition, queued input is discarded to avoid duplicate
-events. A discarded release may leave a previously delivered key press active
-in the consumer. No compensating releases are generated; this remains a known
-limitation of the experimental path.
-
 ## Grabbing global events. (Requires `unstable_grab` feature)
 
 Installing this library with the `unstable_grab` feature adds the `grab` function

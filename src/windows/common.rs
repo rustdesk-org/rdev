@@ -5,7 +5,10 @@ use lazy_static::lazy_static;
 use std::convert::TryInto;
 use std::os::raw::{c_int, c_short};
 use std::ptr::null_mut;
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use winapi::shared::minwindef::{DWORD, HIWORD, LPARAM, LRESULT, WORD, WPARAM};
 use winapi::shared::ntdef::LONG;
 use winapi::shared::windef::HHOOK;
@@ -28,6 +31,17 @@ lazy_static! {
     pub(crate) static ref KEYBOARD: Mutex<Keyboard> = Mutex::new(Keyboard::new());
 }
 
+static UNICODE_PACKET_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Enable raw VK_PACKET capture for listen() and grab(). Disabled by default.
+pub fn set_unicode_packet_enabled(enabled: bool) {
+    UNICODE_PACKET_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+pub fn is_unicode_packet_enabled() -> bool {
+    UNICODE_PACKET_ENABLED.load(Ordering::SeqCst)
+}
+
 pub fn set_modifier(key: Key, down: bool) {
     KEYBOARD.lock().unwrap().set_modifier(key, down);
 }
@@ -38,7 +52,11 @@ pub fn get_modifier(key: Key) -> bool {
 
 pub unsafe fn get_code(lpdata: LPARAM) -> DWORD {
     let kb = *(lpdata as *const KBDLLHOOKSTRUCT);
-    kb.vkCode
+    if kb.vkCode == VK_PACKET as u32 && !is_unicode_packet_enabled() {
+        kb.scanCode
+    } else {
+        kb.vkCode
+    }
 }
 
 pub unsafe fn get_scan_code(lpdata: LPARAM) -> DWORD {
@@ -46,7 +64,7 @@ pub unsafe fn get_scan_code(lpdata: LPARAM) -> DWORD {
     // VK_PACKET carries a UTF-16 code unit, not a physical scan code.
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-keybdinput
     // If the virtual key code is VK_PACKET, the scan code is actually a UTF-16 code unit.
-    if kb.vkCode == VK_PACKET as u32 {
+    if kb.vkCode == VK_PACKET as u32 && is_unicode_packet_enabled() {
         return kb.scanCode;
     }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#:~:text=The%20right%2Dhand%20SHIFT%20key%20is%20not%20considered%20an%20extended%2Dkey%2C%20it%20has%20a%20separate%20scan%20code%20instead.
@@ -166,4 +184,47 @@ pub unsafe fn set_mouse_hook(callback: RawCallback) -> Result<(), HookError> {
     }
     MOUSE_HOOK = hook;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unicode_packets_use_legacy_conversion_by_default() {
+        let packet = KBDLLHOOKSTRUCT {
+            vkCode: VK_PACKET as u32,
+            scanCode: u32::from(b'A'),
+            flags: 0,
+            time: 0,
+            dwExtraInfo: 0,
+        };
+        let data = &packet as *const KBDLLHOOKSTRUCT as LPARAM;
+        unsafe {
+            assert_eq!(
+                convert(WM_KEYDOWN as WPARAM, data),
+                (Some(EventType::KeyPress(Key::KeyA)), u16::from(b'A')),
+            );
+            assert_eq!(get_scan_code(data), u32::from(b'A'));
+        }
+
+        set_unicode_packet_enabled(true);
+        let enabled = unsafe { convert(WM_KEYDOWN as WPARAM, data) };
+        let scan_code = unsafe { get_scan_code(data) };
+        set_unicode_packet_enabled(false);
+        assert_eq!(
+            enabled,
+            (
+                Some(EventType::KeyPress(Key::Unknown(VK_PACKET as u32))),
+                VK_PACKET as u16,
+            ),
+        );
+        assert_eq!(scan_code, u32::from(b'A'));
+        unsafe {
+            assert_eq!(
+                convert(WM_KEYUP as WPARAM, data),
+                (Some(EventType::KeyRelease(Key::KeyA)), u16::from(b'A')),
+            );
+        }
+    }
 }

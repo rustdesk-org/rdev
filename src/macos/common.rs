@@ -1,6 +1,4 @@
 #![allow(clippy::upper_case_acronyms)]
-mod unicode;
-
 use crate::keycodes::macos::virtual_keycodes::*;
 use crate::macos::keyboard::Keyboard;
 use crate::rdev::{Button, Event, EventType, Key};
@@ -166,14 +164,6 @@ pub unsafe fn convert(
     cg_event: &CGEvent,
     keyboard_state: &mut Keyboard,
 ) -> Option<Event> {
-    match unicode::convert(_type, cg_event) {
-        Ok(Some(event)) => return Some(event),
-        Ok(None) => {}
-        Err(error) => {
-            log::error!("{error}");
-            return None;
-        }
-    }
     let mut code = 0;
     let option_type = match _type {
         CGEventType::TapDisabledByTimeout => {
@@ -335,7 +325,6 @@ fn key_to_name(key: Key) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     #[allow(non_snake_case)]
     fn test_KBGetLayoutType() {

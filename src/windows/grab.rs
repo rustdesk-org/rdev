@@ -1,6 +1,6 @@
 use crate::{
     rdev::{Event, EventType, GrabError, Key, UnicodeInfo},
-    windows::common::{convert, get_scan_code, HookError, KEYBOARD},
+    windows::common::{convert, get_scan_code, is_unicode_packet_enabled, HookError, KEYBOARD},
 };
 use std::{io::Error, ptr::null_mut, sync::Mutex, time::SystemTime};
 use winapi::{
@@ -105,7 +105,7 @@ unsafe extern "system" fn raw_callback_keyboard(code: i32, param: usize, lpdata:
 // even when UnicodeInfo.name is None; consumers must assemble surrogate pairs.
 unsafe fn handle_unicode_packet(code: i32, param: usize, lpdata: isize) -> Option<isize> {
     const BLOCK_EVENT: isize = 1;
-    if code != HC_ACTION {
+    if code != HC_ACTION || !is_unicode_packet_enabled() {
         return None;
     }
     let packet = &*(lpdata as PKBDLLHOOKSTRUCT);

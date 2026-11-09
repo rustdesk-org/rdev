@@ -1,6 +1,6 @@
 use crate::rdev::UnicodeInfo;
 // This code is awful. Good luck
-use crate::{key_from_code, Event, EventType, GrabError, Keyboard};
+use crate::{key_from_code, Event, EventType, GrabError, Keyboard, KeyboardState};
 use log::error;
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use std::{
@@ -17,8 +17,6 @@ use std::{
 use x11::xlib::{self, GrabModeAsync, KeyPressMask, KeyReleaseMask, Window};
 
 use super::common::KEYBOARD;
-
-mod record;
 
 enum GrabEvent {
     Exit,
@@ -46,11 +44,11 @@ lazy_static::lazy_static! {
     static ref GRAB_CONTROL_SENDER: Arc<Mutex<Option<Sender<GrabControl>>>> = Arc::new(Mutex::new(None));
 }
 
+const KEYPRESS_EVENT: i32 = 2;
 // It is ok to use unsafe mut here.
 static mut IS_GRABBING: bool = false;
 static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event) -> Option<Event>>> = None;
 const GRAB_RECV: Token = Token(0);
-const RECORD_RECV: Token = Token(1);
 
 impl KeyboardGrabber {
     fn create() -> Result<Self, GrabError> {
@@ -93,37 +91,14 @@ impl KeyboardGrabber {
         poll.registry()
             .register(&mut SourceFd(&self.grab_fd), GRAB_RECV, Interest::READABLE)
             .map_err(GrabError::IoError)?;
-        let initialize_record = || -> Result<_, GrabError> {
-            let record = unsafe { record::RecordedKeyboard::new(self.display) }?;
-            poll.registry()
-                .register(&mut SourceFd(&record.fd()), RECORD_RECV, Interest::READABLE)
-                .map_err(GrabError::IoError)?;
-            Ok(record)
-        };
-        // Keep RECORD opt-in until ordinary input has broader desktop regression coverage.
-        let record = if std::env::var("RDEV_ENABLE_RECORD").as_deref() != Ok("1") {
-            None
-        } else if record::is_supported(self.display) {
-            initialize_record()
-                .or_else(|error| {
-                    log::warn!("Failed to initialize X11 RECORD: {error:?}; retrying once.");
-                    initialize_record()
-                })
-                .map_err(|error| {
-                    log::warn!("X11 RECORD initialization failed again: {error:?}; using ordinary keyboard capture. Unicode Auto-Type with temporary key mappings is unavailable.");
-                })
-                .ok()
-        } else {
-            log::warn!("X11 RECORD is unavailable; using ordinary keyboard capture. Unicode Auto-Type with temporary key mappings is unavailable.");
-            None
-        };
 
         let (tx, rx) = channel();
         GRAB_CONTROL_SENDER.lock().unwrap().replace(tx);
 
         let display_lock = Arc::new(Mutex::new(self.display as u64));
         start_grab_control_thread(display_lock.clone(), self.window, rx);
-        loop_poll_x_event(display_lock, poll, record)
+        loop_poll_x_event(display_lock, poll);
+        Ok(())
     }
 }
 
@@ -150,7 +125,7 @@ fn is_control(unicode_info: &Option<UnicodeInfo>) -> bool {
     })
 }
 
-fn convert_event(code: u32, is_press: bool, state: u32) -> Event {
+fn convert_event(code: u32, is_press: bool) -> Event {
     let key = key_from_code(code);
     let event_type = if is_press {
         EventType::KeyPress(key)
@@ -161,12 +136,7 @@ fn convert_event(code: u32, is_press: bool, state: u32) -> Event {
     let (unicode, platform_code) = unsafe {
         if let Some(kbd) = &mut KEYBOARD {
             // delete -> \u{7f}
-            // Auto-Type may have released Shift before this event is processed.
-            let unicode_info = if is_press {
-                kbd.unicode_from_code(code, state & !xlib::ControlMask)
-            } else {
-                None
-            };
+            let unicode_info = kbd.add(&event_type);
             if is_control(&unicode_info) {
                 (None, kbd.keysym())
             } else {
@@ -255,11 +225,7 @@ fn start_grab_service() -> Result<(), GrabError> {
     Ok(())
 }
 
-fn read_x_event(
-    x_event: &mut xlib::XEvent,
-    display: *mut xlib::Display,
-    forward_keys: bool,
-) -> Result<(), GrabError> {
+fn read_x_event(x_event: &mut xlib::XEvent, display: *mut xlib::Display) {
     while (unsafe { xlib::XPending(display) }) > 0 {
         unsafe {
             // to-do: check the result.
@@ -267,19 +233,13 @@ fn read_x_event(
             // https://linux.die.net/man/3/xnextevent
             xlib::XNextEvent(display, x_event);
         }
-        // RECORD delivers keys with their preceding map changes, before Auto-Type clears them.
-        if !forward_keys || !matches!(unsafe { x_event.type_ }, xlib::KeyPress | xlib::KeyRelease) {
-            continue;
-        }
-        let key = unsafe { x_event.key };
-        let event = convert_event(key.keycode, key.type_ == xlib::KeyPress, key.state);
+        let keycode = unsafe { x_event.key.keycode };
+        let is_press = unsafe { x_event.type_ == KEYPRESS_EVENT };
+        let event = convert_event(keycode, is_press);
         if let Some(tx) = GRAB_KEY_EVENT_SENDER.lock().unwrap().as_ref() {
-            tx.send(GrabEvent::KeyEvent(event)).map_err(|error| {
-                GrabError::IoError(std::io::Error::new(std::io::ErrorKind::BrokenPipe, error))
-            })?;
+            tx.send(GrabEvent::KeyEvent(event)).ok();
         }
     }
-    Ok(())
 }
 
 fn start_grab_control_thread(
@@ -314,41 +274,7 @@ fn start_grab_control_thread(
     });
 }
 
-fn process_record(
-    record: &mut Option<record::RecordedKeyboard>,
-    poll: &Poll,
-    display: &Arc<Mutex<u64>>,
-) -> Result<(), GrabError> {
-    let Some(recorder) = record.as_mut() else {
-        return Ok(());
-    };
-    let Err(error) = recorder.process() else {
-        return Ok(());
-    };
-    // process() uses InvalidData for invalid RECORD lengths or key-event payloads.
-    // Mapping-request parse errors are discarded in receive(); delivery errors must propagate.
-    if !matches!(&error, GrabError::IoError(error) if error.kind() == std::io::ErrorKind::InvalidData)
-    {
-        return Err(error);
-    }
-    poll.registry()
-        .deregister(&mut SourceFd(&recorder.fd()))
-        .map_err(GrabError::IoError)?;
-    *record = None;
-    // RECORD can deliver keys before their copies reach the grab connection.
-    let lock = display.lock().unwrap();
-    unsafe { xlib::XSync(*lock as *mut xlib::Display, xlib::False) };
-    let mut x_event = unsafe { zeroed() };
-    read_x_event(&mut x_event, *lock as *mut xlib::Display, false)?;
-    log::warn!("X11 RECORD event processing failed: {error:?}; using ordinary keyboard capture. Queued input was discarded to avoid replaying recorded keys; lost key-release events may leave keys pressed in the consumer. Unicode Auto-Type with temporary key mappings is unavailable.");
-    Ok(())
-}
-
-fn loop_poll_x_event(
-    display: Arc<Mutex<u64>>,
-    mut poll: Poll,
-    mut record: Option<record::RecordedKeyboard>,
-) -> Result<(), GrabError> {
+fn loop_poll_x_event(display: Arc<Mutex<u64>>, mut poll: Poll) {
     let mut x_event: xlib::XEvent = unsafe { zeroed() };
     let mut events = Events::with_capacity(128);
     loop {
@@ -363,12 +289,11 @@ fn loop_poll_x_event(
                         GRAB_RECV => {
                             let lock = display.lock().unwrap();
                             let display = *lock as *mut xlib::Display;
-                            read_x_event(&mut x_event, display, record.is_none())?;
+                            read_x_event(&mut x_event, display);
                         }
                         _ => {}
                     }
                 }
-                process_record(&mut record, &poll, &display)?;
             }
             Err(e) => {
                 log::error!("Failed to poll event, {}", e);
@@ -376,7 +301,6 @@ fn loop_poll_x_event(
             }
         }
     }
-    Ok(())
 }
 
 #[inline]
