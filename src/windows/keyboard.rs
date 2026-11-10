@@ -1,5 +1,5 @@
 use crate::rdev::{EventType, Key, KeyboardState, UnicodeInfo};
-use crate::windows::common::{get_code, get_scan_code, FALSE, TRUE};
+use crate::windows::common::{get_code, get_scan_code, is_unicode_packet_enabled, FALSE, TRUE};
 use std::collections::HashMap;
 use std::ptr::null_mut;
 use winapi::ctypes::c_int;
@@ -107,6 +107,16 @@ impl Keyboard {
         // https://www.experts-exchange.com/questions/23453780/LowLevel-Keystroke-Hook-removes-Accents-on-French-Keyboard.html
         let code = get_code(lpdata);
         let scan_code = get_scan_code(lpdata);
+
+        // UTF-16 packets bypass keyboard layout and dead-key translation.
+        if code == winuser::VK_PACKET as u32 && is_unicode_packet_enabled() {
+            let unicode = vec![scan_code as u16];
+            return Some(UnicodeInfo {
+                name: String::from_utf16(&unicode).ok(),
+                unicode,
+                is_dead: false,
+            });
+        }
 
         self.set_global_state()?;
         self.get_code_name_unicode(code, scan_code)
