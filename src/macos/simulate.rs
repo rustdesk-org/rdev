@@ -10,6 +10,7 @@ use core_graphics::{
     geometry::CGPoint,
 };
 use std::convert::TryInto;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const SIMULATION_ERROR_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -95,6 +96,26 @@ fn normalize_text_key_event(event: CGEvent, keycode: CGKeyCode) -> CGEvent {
         event.set_flags(flags - CGEventFlags::CGEventFlagNumericPad);
     }
     event
+}
+
+// Keys whose events macOS creates with `CGEventFlagSecondaryFn` set: the keys `workaround_fn`
+// clears it from on key-up. Their key-down keeps it (`F11` does not work without it), so
+// `VirtualInput` leaves Fn as created on those key-downs. A test checks the two lists agree.
+#[allow(non_upper_case_globals)]
+fn has_intrinsic_fn(keycode: CGKeyCode) -> bool {
+    matches!(
+        keycode,
+        kVK_F1 | kVK_F2 | kVK_F3 | kVK_F4 | kVK_F5 | kVK_F6 | kVK_F7 | kVK_F8 | kVK_F9
+            | kVK_F10 | kVK_F11 | kVK_F12 | kVK_F13 | kVK_F14 | kVK_F15 | kVK_F16 | kVK_F17
+            | kVK_F18 | kVK_F19 | kVK_ANSI_KeypadClear | kVK_ForwardDelete | kVK_Home
+            | kVK_End | kVK_PageDown | kVK_PageUp
+            | 129 // Spotlight Search
+            | 130 // Application
+            | 131 // Launchpad
+            | 144 // Brightness Up
+            | 145 // Brightness Down
+            | kVK_UpArrow | kVK_DownArrow | kVK_LeftArrow | kVK_RightArrow | kVK_Help
+    )
 }
 
 #[allow(non_upper_case_globals)]
@@ -312,9 +333,104 @@ pub fn simulate(event_type: &EventType) -> Result<(), SimulateError> {
     }
 }
 
+// https://github.com/rustdesk/rustdesk/issues/14447
+//
+// CGEventCreateKeyboardEvent gives a new key event the modifier flags of its source's state at
+// that moment. With CombinedSessionState, that state was observed (macOS 27) to still report
+// Shift for up to about a second after this input had posted the Shift key-up, so the following
+// keys arrived shifted: a "stuck" Shift. This is the same inheritance as the NumericPad case in
+// `normalize_text_key_event`, applied to the ordinary modifiers. Observed behavior, not an API
+// guarantee: we did not find which part of the pipeline lags.
+//
+// The same was observed for Fn (the Globe key) after Home, End and similar keys, which macOS
+// creates with Fn set: `workaround_fn` clears it on their key-up, but the next keys could still
+// inherit it from the state, so a letter became a Globe shortcut (Globe+E opens the emoji
+// picker). Those keys keep their own Fn on key-down; see `has_intrinsic_fn`.
+// https://github.com/rustdesk/rustdesk/issues/10126
+//
+// VirtualInput therefore records which modifier keys it has pressed and not released, and
+// stamps every key event with exactly those Shift, Control, Option, Command and Fn bits. All
+// other bits, including Caps Lock, NumericPad and unknown system bits, are kept as created.
+//
+// Side effect: a modifier held on the local keyboard no longer applies to keys simulated here.
+// The existing comment in RustDesk's `VirtualInputState::new` already treats RustDesk as the only
+// source of input on the controlled side.
+//
+// (keycode, device-independent flag, device-dependent left/right bit from IOLLEvent.h)
+// Fn has no device-dependent bit, so its own flag doubles as the bit that tracks it.
+const MODIFIER_KEYS: [(CGKeyCode, u64, u64); 9] = [
+    (
+        kVK_Shift,
+        CGEventFlags::CGEventFlagShift.bits(),
+        0x0000_0002,
+    ),
+    (
+        kVK_RightShift,
+        CGEventFlags::CGEventFlagShift.bits(),
+        0x0000_0004,
+    ),
+    (
+        kVK_Control,
+        CGEventFlags::CGEventFlagControl.bits(),
+        0x0000_0001,
+    ),
+    (
+        kVK_RightControl,
+        CGEventFlags::CGEventFlagControl.bits(),
+        0x0000_2000,
+    ),
+    (
+        kVK_Option,
+        CGEventFlags::CGEventFlagAlternate.bits(),
+        0x0000_0020,
+    ),
+    (
+        kVK_RightOption,
+        CGEventFlags::CGEventFlagAlternate.bits(),
+        0x0000_0040,
+    ),
+    (
+        kVK_Command,
+        CGEventFlags::CGEventFlagCommand.bits(),
+        0x0000_0008,
+    ),
+    (
+        kVK_RightCommand,
+        CGEventFlags::CGEventFlagCommand.bits(),
+        0x0000_0010,
+    ),
+    (
+        kVK_Function,
+        CGEventFlags::CGEventFlagSecondaryFn.bits(),
+        CGEventFlags::CGEventFlagSecondaryFn.bits(),
+    ),
+];
+
+fn modifier_mask() -> u64 {
+    MODIFIER_KEYS
+        .iter()
+        .fold(0, |mask, (_, flag, bit)| mask | flag | bit)
+}
+
+fn key_event_keycode(event_type: &EventType) -> Option<(CGKeyCode, bool)> {
+    let (key, down) = match event_type {
+        EventType::KeyPress(key) => (key, true),
+        EventType::KeyRelease(key) => (key, false),
+        _ => return None,
+    };
+    let keycode = match key {
+        crate::Key::RawKey(RawKey::MacVirtualKeycode(code)) => *code as CGKeyCode,
+        crate::Key::RawKey(_) => return None,
+        _ => code_from_key(*key)? as CGKeyCode,
+    };
+    Some((keycode, down))
+}
+
 pub struct VirtualInput {
     source: CGEventSource,
     tap_loc: CGEventTapLocation,
+    // Device-dependent bits (the flag, for Fn) of the modifier keys this input holds.
+    held_modifiers: AtomicU64,
 }
 
 impl VirtualInput {
@@ -327,12 +443,42 @@ impl VirtualInput {
                 );
             })?,
             tap_loc,
+            held_modifiers: AtomicU64::new(0),
         })
+    }
+
+    fn stamp_modifier_flags(&self, event_type: &EventType, event: &CGEvent) {
+        let Some((keycode, down)) = key_event_keycode(event_type) else {
+            return;
+        };
+        let mut held = self.held_modifiers.load(Ordering::Relaxed);
+        if let Some(&(_, _, bit)) = MODIFIER_KEYS.iter().find(|(code, _, _)| *code == keycode) {
+            held = if down { held | bit } else { held & !bit };
+            self.held_modifiers.store(held, Ordering::Relaxed);
+        }
+        let wanted = MODIFIER_KEYS
+            .iter()
+            .filter(|(_, _, bit)| held & bit != 0)
+            .fold(0, |wanted, (_, flag, bit)| wanted | flag | bit);
+        let mut mask = modifier_mask();
+        if down && has_intrinsic_fn(keycode) {
+            mask &= !CGEventFlags::CGEventFlagSecondaryFn.bits();
+        }
+        let flags = event.get_flags().bits();
+        let stamped = (flags & !mask) | wanted;
+        if stamped != flags {
+            log::debug!("Correcting inherited modifier flags on macOS key event");
+            // SAFETY: CGEventFlags is a repr(C) u64 wrapper, including with bitflags 1.0.
+            // A plain u64 keeps the device-dependent and unknown system bits that the named
+            // flags do not cover.
+            event.set_flags(unsafe { std::mem::transmute::<u64, CGEventFlags>(stamped) });
+        }
     }
 
     pub fn simulate(&self, event_type: &EventType) -> Result<(), SimulateError> {
         unsafe {
             if let Some(cg_event) = convert_native_with_source(event_type, self.source.clone()) {
+                self.stamp_modifier_flags(event_type, &cg_event);
                 cg_event.post(self.tap_loc);
                 if matches!(
                     event_type,
@@ -406,5 +552,143 @@ mod tests {
             let event = normalize_text_key_event(event, keycode);
             assert_eq!(event.get_flags(), flags, "keycode {keycode}");
         }
+    }
+
+    const SHIFT: u64 = 0x0002_0000;
+    const LEFT_SHIFT: u64 = 0x0000_0002;
+    const RIGHT_SHIFT: u64 = 0x0000_0004;
+    const CAPS_LOCK: u64 = 0x0001_0000;
+    const FN: u64 = 0x0080_0000;
+    const SYSTEM_EVENT_FLAG: u64 = 0x2000_0000;
+
+    fn virtual_input() -> VirtualInput {
+        VirtualInput::new(CGEventSourceStateID::Private, CGEventTapLocation::Session).unwrap()
+    }
+
+    // Builds the event as VirtualInput::simulate does, gives it `inherited` flags in place of a
+    // source state that has not caught up, then stamps it. Nothing is posted.
+    fn stamped(input: &VirtualInput, event_type: &EventType, inherited: u64) -> u64 {
+        let event =
+            unsafe { convert_native_with_source(event_type, input.source.clone()) }.unwrap();
+        // SAFETY: CGEventFlags is a repr(C) u64 wrapper, including with bitflags 1.0.
+        event.set_flags(unsafe { std::mem::transmute::<u64, CGEventFlags>(inherited) });
+        input.stamp_modifier_flags(event_type, &event);
+        event.get_flags().bits()
+    }
+
+    #[test]
+    fn key_after_shift_release_drops_inherited_shift() {
+        let input = virtual_input();
+        stamped(&input, &EventType::KeyPress(crate::Key::ShiftLeft), 0);
+        stamped(
+            &input,
+            &EventType::KeyRelease(crate::Key::ShiftLeft),
+            SHIFT | LEFT_SHIFT,
+        );
+        let flags = stamped(
+            &input,
+            &EventType::KeyPress(crate::Key::KeyA),
+            SHIFT | LEFT_SHIFT,
+        );
+        assert_eq!(flags & (SHIFT | LEFT_SHIFT), 0);
+    }
+
+    #[test]
+    fn key_while_shift_held_keeps_shift() {
+        let input = virtual_input();
+        stamped(&input, &EventType::KeyPress(crate::Key::ShiftLeft), 0);
+        let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyA), 0);
+        assert_eq!(flags & (SHIFT | LEFT_SHIFT), SHIFT | LEFT_SHIFT);
+    }
+
+    #[test]
+    fn raw_keycodes_are_tracked() {
+        let input = virtual_input();
+        let shift = crate::Key::RawKey(RawKey::MacVirtualKeycode(kVK_RightShift as _));
+        stamped(&input, &EventType::KeyPress(shift), 0);
+        let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyA), 0);
+        assert_eq!(flags & SHIFT, SHIFT);
+        stamped(&input, &EventType::KeyRelease(shift), SHIFT);
+        let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyA), SHIFT);
+        assert_eq!(flags & SHIFT, 0);
+    }
+
+    #[test]
+    fn key_after_home_drops_inherited_fn() {
+        let input = virtual_input();
+        stamped(&input, &EventType::KeyPress(crate::Key::Home), FN);
+        stamped(&input, &EventType::KeyRelease(crate::Key::Home), FN);
+        let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyE), FN);
+        assert_eq!(flags & FN, 0);
+    }
+
+    #[test]
+    fn key_while_fn_held_keeps_fn() {
+        let input = virtual_input();
+        let globe = crate::Key::RawKey(RawKey::MacVirtualKeycode(kVK_Function as _));
+        stamped(&input, &EventType::KeyPress(globe), 0);
+        let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyE), 0);
+        assert_eq!(flags & FN, FN);
+        stamped(&input, &EventType::KeyRelease(globe), FN);
+        let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyE), FN);
+        assert_eq!(flags & FN, 0);
+    }
+
+    fn raw(keycode: CGKeyCode) -> crate::Key {
+        crate::Key::RawKey(RawKey::MacVirtualKeycode(keycode as _))
+    }
+
+    #[test]
+    fn intrinsic_fn_keys_match_workaround_fn() {
+        let source = CGEventSource::new(CGEventSourceStateID::Private).unwrap();
+        for keycode in 0..=255 {
+            let event = CGEvent::new_keyboard_event(source.clone(), keycode, false).unwrap();
+            // SAFETY: CGEventFlags is a repr(C) u64 wrapper, including with bitflags 1.0.
+            event.set_flags(unsafe { std::mem::transmute::<u64, CGEventFlags>(FN) });
+            let cleared = workaround_fn(event, keycode).get_flags().bits() & FN == 0;
+            assert_eq!(cleared, has_intrinsic_fn(keycode), "keycode {keycode}");
+        }
+    }
+
+    #[test]
+    fn function_and_navigation_key_downs_keep_intrinsic_fn() {
+        for keycode in [kVK_F11, kVK_Home, kVK_End, kVK_LeftArrow, kVK_ForwardDelete] {
+            let input = virtual_input();
+            let flags = stamped(&input, &EventType::KeyPress(raw(keycode)), FN);
+            assert_eq!(flags & FN, FN, "key down {keycode}");
+            let flags = stamped(&input, &EventType::KeyRelease(raw(keycode)), FN);
+            assert_eq!(flags & FN, 0, "key up {keycode}");
+        }
+    }
+
+    #[test]
+    fn releasing_one_shift_keeps_the_other() {
+        let input = virtual_input();
+        stamped(&input, &EventType::KeyPress(raw(kVK_Shift)), 0);
+        stamped(&input, &EventType::KeyPress(raw(kVK_RightShift)), SHIFT);
+        stamped(&input, &EventType::KeyRelease(raw(kVK_Shift)), SHIFT);
+        let flags = stamped(
+            &input,
+            &EventType::KeyPress(crate::Key::KeyA),
+            SHIFT | LEFT_SHIFT,
+        );
+        assert_eq!(
+            flags & (SHIFT | LEFT_SHIFT | RIGHT_SHIFT),
+            SHIFT | RIGHT_SHIFT
+        );
+        stamped(&input, &EventType::KeyRelease(raw(kVK_RightShift)), SHIFT);
+        let flags = stamped(&input, &EventType::KeyPress(crate::Key::KeyA), SHIFT);
+        assert_eq!(flags & SHIFT, 0);
+    }
+
+    #[test]
+    fn stamping_keeps_non_modifier_flags() {
+        let input = virtual_input();
+        let flags = stamped(
+            &input,
+            &EventType::KeyPress(crate::Key::KeyA),
+            CAPS_LOCK | SHIFT | SYSTEM_EVENT_FLAG,
+        );
+        assert_eq!(flags, CAPS_LOCK | SYSTEM_EVENT_FLAG);
     }
 }
