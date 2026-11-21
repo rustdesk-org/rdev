@@ -380,7 +380,9 @@ pub use crate::windows::set_mouse_extra_info;
 #[cfg(target_os = "windows")]
 pub use crate::windows::{exit_grab, grab as _grab, is_grabbed};
 #[cfg(target_os = "windows")]
-pub use crate::windows::{set_event_popup, set_get_key_unicode};
+pub use crate::windows::{
+    is_unicode_packet_enabled, set_event_popup, set_get_key_unicode, set_unicode_packet_enabled,
+};
 
 /// Grabbing global events. In the callback, returning None ignores the event
 /// and returning the event let's it pass. There is no modification of the event
