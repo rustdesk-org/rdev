@@ -6,6 +6,7 @@ use cocoa::base::id;
 use core_graphics::{
     event::{CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode, EventField},
     event_source::CGEventSourceStateID,
+    sys::CGEventRef,
 };
 use lazy_static::lazy_static;
 use std::convert::TryInto;
@@ -22,7 +23,6 @@ pub type CFRunLoopSourceRef = id;
 pub type CFRunLoopRef = id;
 pub type CFRunLoopMode = id;
 pub type CGEventTapProxy = id;
-pub type CGEventRef = CGEvent;
 pub type FourCharCode = ::std::os::raw::c_uint;
 pub type OSType = FourCharCode;
 pub type PhysicalKeyboardLayoutType = OSType;
@@ -94,6 +94,8 @@ extern "C" {
     ) -> CFRunLoopSourceRef;
     pub fn CFRunLoopGetCurrent() -> CFRunLoopRef;
     pub fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFRunLoopMode);
+    // Only the worker-thread regression compares against the main run loop.
+    #[cfg(test)]
     pub fn CFRunLoopGetMain() -> CFRunLoopRef;
     pub fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     pub fn CFRunLoopRun();
